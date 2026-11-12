@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vorratslager</title>
+<style>
+:root{--bg:#E8EFED;--card:#fff;--ink:#15302B;--mut:#5E7771;--acc:#0E6B5C;--warn:#B7791F;--bad:#B42318;--line:#CFDBD7;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:72px}
+h1,h3{margin:0}button,input,select,textarea{font:inherit;color:inherit}
+input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fff}
+button{border:0;border-radius:8px;padding:9px 13px;background:var(--acc);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--acc);border:1px solid var(--line)}button.sm{padding:4px 9px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #7FC4B8;outline-offset:1px}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:var(--ink);color:#fff}
+main{max-width:980px;margin:0 auto;padding:12px}
+.bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px}.list{display:grid;gap:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.top{display:flex;gap:10px;align-items:center}.ico{width:40px;height:40px;border-radius:10px;background:#DCEBE7;display:grid;place-items:center;color:var(--acc);flex:none}
+.grow{flex:1;min-width:0}.mut{color:var(--mut);font-size:13px}.tot{font-weight:700;font-size:18px}
+.b{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--line);font-size:13px}
+.tag{padding:1px 7px;border-radius:99px;background:#DCEBE7;font-size:12px}.ok{color:var(--acc)}.w{color:var(--warn);font-weight:600}.x{color:var(--bad);font-weight:600}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#fff;border-top:1px solid var(--line)}
+nav button{flex:1;background:none;color:var(--mut);border-radius:0;padding:10px 4px;font-size:12px}nav button.on{color:var(--acc);font-weight:700}
+dialog{border:0;border-radius:14px;padding:16px;width:min(460px,94vw);max-height:92vh}dialog::backdrop{background:#0008}
+dialog label{display:block;margin:8px 0 2px;font-size:13px;color:var(--mut)}.row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.login{max-width:340px;margin:12vh auto;padding:16px}
+.fab{position:fixed;right:14px;bottom:80px;border-radius:99px;padding:13px 18px;box-shadow:0 3px 12px #0003}
+i[data-lucide],svg.lucide{width:20px;height:20px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+</head><body>
+<div id="app"></div><dialog id="dlg"></dialog>
+<script>
+// ===== Konfiguration: Werte aus Supabase > Project Settings > API =====
+const SB_URL='DEINE_SUPABASE_URL', SB_KEY='DEIN_ANON_PUBLIC_KEY';
+const sb=supabase.createClient(SB_URL,SB_KEY);
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STOR={frozen:'Gefroren',cold:'Gekühlt',room:'Raumtemperatur',dark:'Dunkel & trocken'};
+const ICONS=['package','apple','milk','beer','wine','glass-water','cup-soda','beef','drumstick','pizza','snowflake','wheat','cookie','egg','carrot','fish','soup','coffee','cherry','citrus','sandwich','candy','ice-cream-cone','salad','croissant'];
+const GUESS=[[/bier/i,'beer'],[/wasser/i,'glass-water'],[/limo|cola|saft|brause/i,'cup-soda'],[/milch|käse|joghurt|butter|sahne/i,'milk'],[/fleisch|wurst|schinken|hack/i,'beef'],[/tief|gefror/i,'snowflake'],[/mehl|zucker|nudel|reis|trocken/i,'wheat'],[/wein|schnaps|alk|vodka|whisk|gin/i,'wine'],[/apfel|obst|birne/i,'apple'],[/fertig|pizza/i,'pizza']];
+
+// ===== Klassen =====
+class Artikel{
+  constructor(r){Object.assign(this,r)}
+  get icon_name(){return this.icon||(GUESS.find(([re])=>re.test(this.name+' '+(S.cats.find(c=>c.id==this.category_id)?.name||'')))||[0,'package'])[1]}
+  get info(){return [this.brand,this.weight].filter(Boolean).join(' · ')}
+}
+class Lebensmittel extends Artikel{}
+class Getraenk extends Artikel{
+  get info(){return [this.brand,this.weight,this.pack,this.alcohol===true?'mit Alkohol':this.alcohol===false?'alkoholfrei':'',this.sugar===true?'mit Zucker':this.sugar===false?'ohne Zucker':''].filter(Boolean).join(' · ')}
+}
+
+let S={user:null,role:'user',cats:[],locs:[],items:[],batches:[],log:[]};
+let V={tab:'stock',mode:'item',grid:true,q:'',cat:'',loc:'',stor:'',tag:''};
+const warnDays=()=>+localStorage.warnDays||14;
+const today=()=>new Date().toISOString().slice(0,10);
+const addDays=n=>{const d=new Date();d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)};
+const total=id=>S.batches.filter(b=>b.item_id==id).reduce((s,b)=>s+ +b.qty,0);
+const locName=id=>S.locs.find(l=>l.id==id)?.name||'–';
+const fmtD=d=>d?d.split('-').reverse().join('.'):'ohne Datum';
+function expCls(d){if(!d)return'mut';const n=(new Date(d)-new Date(today()))/864e5;return n<0?'x':n<=warnDays()?'w':'ok'}
+
+// ===== Daten =====
+async function load(){
+  const q=t=>sb.from(t).select('*');
+  const [c,l,i,b,g,p]=await Promise.all([q('categories').order('name'),q('locations').order('name'),q('items').order('name'),q('batches'),
+    sb.from('log').select('*').order('created_at',{ascending:false}).limit(300),sb.from('profiles').select('role').eq('id',S.user.id).maybeSingle()]);
+  S.cats=c.data||[];S.locs=l.data||[];S.batches=b.data||[];S.log=g.data||[];S.role=p.data?.role||'user';
+  S.items=(i.data||[]).map(r=>r.kind==='drink'?new Getraenk(r):new Lebensmittel(r));
+}
+const logit=(action,item_name,delta,detail)=>sb.from('log').insert({user_email:S.user.email,action,item_name,delta,detail});
+
+// ===== Start / Login =====
+async function init(){
+  const {data}=await sb.auth.getSession();
+  if(!data.session)return loginView();
+  S.user=data.session.user;await load();render();
+  setInterval(async()=>{await load();render(true)},60*60*1000);
+  document.addEventListener('visibilitychange',async()=>{if(!document.hidden){await load();render(true)}});
+}
+function loginView(msg=''){
+  $('#app').innerHTML=`<div class="card login"><h1>Vorratslager</h1><p class="mut">Mit deinem Zugang anmelden.</p>
+  <label>E-Mail</label><input id="em" type="email" autocomplete="username"><label>Passwort</label><input id="pw" type="password" autocomplete="current-password">
+  <p class="x">${esc(msg)}</p><button id="go" style="width:100%">Anmelden</button></div>`;
+  $('#go').onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$('#em').value,password:$('#pw').value});error?loginView('E-Mail oder Passwort stimmt nicht.'):init()};
+}
+
+// ===== Rendering =====
+function render(keep){
+  if(keep&&document.querySelector('dialog[open]'))return;
+  const tabs=[['stock','package','Bestand'],['shop','shopping-cart','Einkauf'],['log','history','Verlauf'],['export','download','Export']];
+  if(S.role==='admin')tabs.push(['admin','settings','Verwaltung']);
+  $('#app').innerHTML=`<header><h1>Vorratslager</h1><span class="mut" style="color:#BFD3CE">${esc(S.user.email)} · ${S.role==='admin'?'Admin':'Nutzer'} <button class="sm ghost" data-a="logout" style="color:#fff">Abmelden</button></span></header>
+  <main id="main"></main><nav>${tabs.map(t=>`<button data-a="tab" data-v="${t[0]}" class="${V.tab===t[0]?'on':''}"><i data-lucide="${t[1]}"></i><br>${t[2]}</button>`).join('')}</nav>`;
+  ({stock:stockView,shop:shopView,log:logView,export:exportView,admin:adminView})[V.tab]();
+  lucide.createIcons();
+}
+const opts=(arr,val,blank)=>(blank!=null?`<option value="">${blank}</option>`:'')+arr.map(([v,l])=>`<option value="${v}" ${String(v)===String(val)?'selected':''}>${esc(l)}</option>`).join('');
+const catOpts=()=>S.cats.map(c=>[c.id,(c.parent_id?'– ':'')+c.name]);
+
+function stockView(){
+  const tags=[...new Set(S.items.flatMap(i=>i.tags||[]))].sort();
+  $('#main').innerHTML=`<div class="bar">
+   <input id="q" placeholder="Suchen …" value="${esc(V.q)}">
+   <select id="cat">${opts(catOpts(),V.cat,'Alle Kategorien')}</select>
+   <select id="loc">${opts(S.locs.map(l=>[l.id,l.name]),V.loc,'Alle Orte')}</select>
+   <select id="stor">${opts(Object.entries(STOR),V.stor,'Alle Lagerarten')}</select>
+   <select id="tag">${opts(tags.map(t=>[t,t]),V.tag,'Alle Tags')}</select>
+   <button class="ghost" data-a="mode">${V.mode==='item'?'Nach Artikel':'Nach Lagerort'}</button>
+   <button class="ghost" data-a="grid">${V.grid?'Kacheln':'Liste'}</button></div><div id="list"></div>
+   <button class="fab" data-a="newitem"><i data-lucide="plus"></i> Artikel</button>`;
+  for(const k of ['cat','loc','stor','tag'])$('#'+k).onchange=e=>{V[k]=e.target.value;listView()};
+  $('#q').oninput=e=>{V.q=e.target.value;listView()};
+  listView();
+}
+function matchItem(i){
+  const cat=S.cats.find(c=>c.id==i.category_id);
+  return (!V.q||(i.name+' '+(i.brand||'')+' '+(i.note||'')).toLowerCase().includes(V.q.toLowerCase()))
+   &&(!V.cat||i.category_id==V.cat||cat?.parent_id==V.cat)&&(!V.tag||(i.tags||[]).includes(V.tag));
+}
+const matchB=b=>(!V.loc||b.location_id==V.loc)&&(!V.stor||b.storage===V.stor);
+function batchRow(b,showItem){
+  const it=S.items.find(i=>i.id==b.item_id);
+  return `<div class="b">${showItem?`<i data-lucide="${it.icon_name}"></i><b>${esc(it.name)}</b>`:''}
+   ${showItem?'':`<span>${esc(locName(b.location_id))}</span>`}<span class="tag">${STOR[b.storage]||'–'}</span>
+   <span class="${expCls(b.expiry)}">${fmtD(b.expiry)}</span><span style="flex:1"></span>
+   <button class="sm ghost" data-a="qty" data-b="${b.id}" data-d="-1">−</button><b>${+b.qty} ${esc(it.unit||'')}</b>
+   <button class="sm ghost" data-a="qty" data-b="${b.id}" data-d="1">+</button>
+   <button class="sm ghost" data-a="move" data-b="${b.id}" title="Verlegen"><i data-lucide="move"></i></button></div>`;
+}
+function listView(){
+  let html='';
+  if(V.mode==='item'){
+    for(const i of S.items.filter(matchItem)){
+      const bs=S.batches.filter(b=>b.item_id==i.id&&matchB(b));
+      if((V.loc||V.stor)&&!bs.length)continue;
+      const low=i.min_stock>0&&total(i.id)<i.min_stock;
+      html+=`<div class="card"><div class="top"><div class="ico"><i data-lucide="${i.icon_name}"></i></div>
+       <div class="grow"><b>${esc(i.name)}</b><div class="mut">${esc(i.info)}</div></div>
+       <div class="tot ${low?'x':''}">${total(i.id)} ${esc(i.unit||'')}</div></div>
+       ${(i.tags||[]).map(t=>`<span class="tag">${esc(t)}</span> `).join('')}${low?'<span class="tag x">unter Mindestbestand</span>':''}
+       ${bs.map(b=>batchRow(b)).join('')}
+       <div class="row" style="margin-top:6px"><button class="sm ghost" data-a="addb" data-i="${i.id}">+ Charge</button><button class="sm ghost" data-a="edit" data-i="${i.id}">Bearbeiten</button></div></div>`;
+    }
+  }else{
+    for(const l of S.locs.filter(l=>!V.loc||l.id==V.loc)){
+      const bs=S.batches.filter(b=>b.location_id==l.id&&matchB(b)&&matchItem(S.items.find(i=>i.id==b.item_id)||{}));
+      if(bs.length)html+=`<div class="card"><h3>${esc(l.name)}</h3>${bs.map(b=>batchRow(b,true)).join('')}</div>`;
+    }
+  }
+  $('#list').className=V.grid?'grid':'list';
+  $('#list').innerHTML=html||'<p class="mut">Keine Treffer. Lege mit „+ Artikel“ den ersten Eintrag an.</p>';
+  lucide.createIcons();
+}
+function shopView(){
+  const need=S.items.filter(i=>i.min_stock>0&&total(i.id)<i.min_stock);
+  $('#main').innerHTML=`<div class="card"><h3>Einkaufsliste</h3>${need.map(i=>`<div class="b"><i data-lucide="${i.icon_name}"></i><b>${esc(i.name)}</b><span style="flex:1"></span>
+   <span>fehlt: <b>${i.min_stock-total(i.id)} ${esc(i.unit||'')}</b> (Bestand ${total(i.id)}, Min. ${i.min_stock})</span></div>`).join('')||'<p class="mut">Nichts nachzukaufen. Setze bei Artikeln einen Mindestbestand.</p>'}
+   ${need.length?'<div class="row"><button data-a="copylist">Liste kopieren</button></div>':''}</div>`;
+}
+function logView(){
+  $('#main').innerHTML=`<div class="card"><h3>Verlauf</h3>${S.log.map(g=>`<div class="b"><span class="mut">${new Date(g.created_at).toLocaleString('de-DE')}</span><b>${esc(g.action)}</b>
+   <span>${esc(g.item_name)} ${g.delta?`(${g.delta>0?'+':''}${g.delta})`:''}</span><span class="mut">${esc(g.detail||'')} · ${esc(g.user_email)}</span></div>`).join('')||'<p class="mut">Noch keine Buchungen.</p>'}</div>`;
+}
+function exportView(){
+  $('#main').innerHTML=`<div class="card"><h3>Export für Excel (CSV)</h3><p class="mut">Semikolon-getrennt, öffnet direkt in Excel.</p>
+   <div class="row" style="justify-content:flex-start"><button data-a="exp1">Bestand</button><button data-a="exp2">Verbrauch pro Monat und Jahr</button></div></div>`;
+}
+function adminView(){
+  const row=(t,x,extra='')=>`<div class="b"><b>${esc(x.name)}</b>${extra}<span style="flex:1"></span><button class="sm ghost" data-a="del${t}" data-id="${x.id}">Löschen</button></div>`;
+  $('#main').innerHTML=`<div class="card"><h3>Kategorien</h3>${S.cats.map(c=>row('cat',c,`<span class="mut">${c.parent_id?'in '+esc(S.cats.find(p=>p.id==c.parent_id)?.name):''} ${c.shelf_days?'· '+c.shelf_days+' Tage haltbar':''}</span>`)).join('')}
+   <div class="row" style="justify-content:flex-start"><button data-a="newcat">+ Kategorie</button></div></div><br>
+   <div class="card"><h3>Lagerorte</h3>${S.locs.map(l=>row('loc',l)).join('')}<div class="row" style="justify-content:flex-start"><button data-a="newloc">+ Lagerort</button></div></div><br>
+   <div class="card"><h3>Warnung vor Ablauf</h3><p class="mut">Aktuell ${warnDays()} Tage vorher (gilt nur auf diesem Gerät).</p><button data-a="warn">Ändern</button>
+   <p class="mut">Neue Nutzer legst du in Supabase unter Authentication an. Rollen stehen in der Tabelle „profiles“.</p></div>`;
+}
+
+// ===== Dialoge =====
+function dlg(title,body,onSave){
+  const d=$('#dlg');
+  d.innerHTML=`<form><h3>${title}</h3>${body}<div class="row"><button type="button" class="ghost" id="cx">Abbrechen</button><button>Speichern</button></div></form>`;
+  $('#cx').onclick=()=>d.close();
+  d.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await onSave(Object.fromEntries(new FormData(e.target)))}catch(x){alert('Fehler: '+(x.message||x));return}d.close();await load();render()};
+  d.showModal();lucide.createIcons();
+}
+const batchFields=b=>`<div class="two"><div><label>Lagerort</label><select name="location_id">${opts(S.locs.map(l=>[l.id,l.name]),b?.location_id,'–')}</select></div>
+ <div><label>Lagerart</label><select name="storage">${opts(Object.entries(STOR),b?.storage||'room')}</select></div>
+ <div><label>Menge</label><input name="qty" type="number" step="any" min="0" value="${b?.qty??1}"></div>
+ <div><label>Ablauf (leer = Standard der Kategorie)</label><input name="expiry" type="date" value="${b?.expiry||''}"></div></div>`;
+function batchData(f,item){
+  let exp=f.expiry||null;const cat=S.cats.find(c=>c.id==item.category_id);
+  if(!exp&&cat?.shelf_days)exp=addDays(cat.shelf_days);
+  return {item_id:item.id,location_id:f.location_id||null,storage:f.storage,qty:+f.qty||0,expiry:exp};
+}
+function itemDialog(it){
+  const n=!it;
+  dlg(n?'Neuer Artikel':'Artikel bearbeiten',`
+   <label>Name</label><input name="name" required value="${esc(it?.name)}">
+   <div class="two"><div><label>Art</label><select name="kind">${opts([['food','Lebensmittel'],['drink','Getränk']],it?.kind||'food')}</select></div>
+   <div><label>Kategorie</label><select name="category_id">${opts(catOpts(),it?.category_id,'–')}</select></div>
+   <div><label>Marke</label><input name="brand" value="${esc(it?.brand)}"></div><div><label>Einheit</label><input name="unit" placeholder="Stk, Kasten, kg" value="${esc(it?.unit)}"></div>
+   <div><label>Gewicht/Volumen</label><input name="weight" value="${esc(it?.weight)}"></div><div><label>Mindestbestand</label><input name="min_stock" type="number" step="any" value="${it?.min_stock||0}"></div>
+   <div><label>Gebinde (Getränke)</label><select name="pack">${opts(['Einzel','9er-Pack','Kasten'].map(x=>[x,x]),it?.pack,'–')}</select></div>
+   <div><label>Icon</label><select name="icon">${opts(ICONS.map(x=>[x,x]),it?.icon,'automatisch')}</select></div>
+   <div><label>Alkohol</label><select name="alcohol">${opts([['1','mit'],['0','ohne']],it?.alcohol==null?'':it.alcohol?'1':'0','–')}</select></div>
+   <div><label>Zucker</label><select name="sugar">${opts([['1','mit'],['0','ohne']],it?.sugar==null?'':it.sugar?'1':'0','–')}</select></div></div>
+   <label>Tags (mit Komma trennen)</label><input name="tags" value="${esc((it?.tags||[]).join(', '))}">
+   <label>Notiz</label><textarea name="note" rows="2">${esc(it?.note)}</textarea>${n?'<h3 style="margin-top:12px">Erste Charge</h3>'+batchFields():''}`,
+  async f=>{
+    const row={name:f.name,kind:f.kind,category_id:f.category_id||null,brand:f.brand||null,unit:f.unit||null,weight:f.weight||null,note:f.note||null,
+      min_stock:+f.min_stock||0,pack:f.pack||null,icon:f.icon||null,alcohol:f.alcohol===''?null:f.alcohol==='1',sugar:f.sugar===''?null:f.sugar==='1',
+      tags:f.tags.split(',').map(t=>t.trim()).filter(Boolean)};
+    if(n){
+      const {data,error}=await sb.from('items').insert(row).select().single();if(error)throw error;
+      const b=batchData(f,data);if(b.qty>0){await sb.from('batches').insert(b);}
+      await logit('Neu angelegt',row.name,b.qty,locName(b.location_id));
+    }else{const {error}=await sb.from('items').update(row).eq('id',it.id);if(error)throw error;await logit('Artikel geändert',row.name,0,'')}
+  });
+}
+function batchDialog(it){
+  dlg('Neue Charge: '+esc(it.name),batchFields(),async f=>{
+    const b=batchData(f,it);const {error}=await sb.from('batches').insert(b);if(error)throw error;await logit('Zugang',it.name,b.qty,locName(b.location_id));});
+}
+function moveDialog(b){
+  const it=S.items.find(i=>i.id==b.item_id);
+  dlg('Verlegen: '+esc(it.name),`<p class="mut">Aktuell ${+b.qty} in ${esc(locName(b.location_id))}.</p>
+   <label>Neuer Lagerort</label><select name="loc">${opts(S.locs.map(l=>[l.id,l.name]),'')}</select>
+   <label>Menge</label><input name="qty" type="number" step="any" min="0" max="${b.qty}" value="${b.qty}">`,async f=>{
+    const q=Math.min(+f.qty,+b.qty);if(!q||f.loc==b.location_id)return;
+    const {error}=await sb.from('batches').insert({item_id:b.item_id,location_id:+f.loc,storage:b.storage,qty:q,expiry:b.expiry});if(error)throw error;
+    q>=b.qty?await sb.from('batches').delete().eq('id',b.id):await sb.from('batches').update({qty:b.qty-q}).eq('id',b.id);
+    await logit('Verlegt',it.name,0,`${q} von ${locName(b.location_id)} nach ${locName(+f.loc)}`);});
+}
+const simple=(title,table,extra='',map=f=>({name:f.name}))=>dlg(title,`<label>Name</label><input name="name" required>${extra}`,async f=>{const {error}=await sb.from(table).insert(map(f));if(error)throw error});
+
+// ===== Aktionen =====
+const A={
+  tab:d=>{V.tab=d.v;render()},mode:()=>{V.mode=V.mode==='item'?'loc':'item';stockView()},grid:()=>{V.grid=!V.grid;stockView()},
+  logout:async()=>{await sb.auth.signOut();loginView()},
+  newitem:()=>itemDialog(),edit:d=>itemDialog(S.items.find(i=>i.id==d.i)),addb:d=>batchDialog(S.items.find(i=>i.id==d.i)),
+  move:d=>moveDialog(S.batches.find(b=>b.id==d.b)),
+  qty:async d=>{
+    const b=S.batches.find(x=>x.id==d.b),it=S.items.find(i=>i.id==b.item_id),n=Math.max(0,+b.qty+ +d.d);
+    n===0?await sb.from('batches').delete().eq('id',b.id):await sb.from('batches').update({qty:n}).eq('id',b.id);
+    await logit(d.d>0?'Zugang':'Entnahme',it.name,+d.d,locName(b.location_id));await load();listView();
+  },
+  newcat:()=>simple('Neue Kategorie','categories',`<label>Oberkategorie</label><select name="parent_id">${opts(catOpts(),'','keine')}</select><label>Standard-Haltbarkeit in Tagen</label><input name="shelf_days" type="number">`,f=>({name:f.name,parent_id:f.parent_id||null,shelf_days:+f.shelf_days||null})),
+  newloc:()=>simple('Neuer Lagerort','locations'),
+  delcat:async d=>{if(confirm('Kategorie löschen?')){await sb.from('categories').delete().eq('id',d.id);await load();render()}},
+  delloc:async d=>{if(confirm('Lagerort löschen?')){await sb.from('locations').delete().eq('id',d.id);await load();render()}},
+  warn:()=>{const n=prompt('Wie viele Tage vor Ablauf warnen?',warnDays());if(n)localStorage.warnDays=+n;render()},
+  copylist:()=>{navigator.clipboard.writeText(S.items.filter(i=>i.min_stock>0&&total(i.id)<i.min_stock).map(i=>`- ${i.name}: ${i.min_stock-total(i.id)} ${i.unit||''}`).join('\n'));alert('Kopiert.')},
+  exp1:()=>csv('bestand',[['Artikel','Art','Kategorie','Marke','Lagerort','Lagerart','Menge','Einheit','Ablauf','Tags'],...S.batches.map(b=>{
+    const i=S.items.find(x=>x.id==b.item_id);return [i.name,i.kind==='drink'?'Getränk':'Lebensmittel',S.cats.find(c=>c.id==i.category_id)?.name,i.brand,locName(b.location_id),STOR[b.storage],b.qty,i.unit,b.expiry,(i.tags||[]).join(',')]})]),
+  exp2:async()=>{
+    const {data}=await sb.from('log').select('*').eq('action','Entnahme').limit(10000);const m={},y={};
+    for(const g of data||[]){const mo=g.created_at.slice(0,7);m[g.item_name+'|'+mo]=(m[g.item_name+'|'+mo]||0)-g.delta;y[g.item_name+'|'+mo.slice(0,4)]=(y[g.item_name+'|'+mo.slice(0,4)]||0)-g.delta}
+    csv('verbrauch',[['Artikel','Zeitraum','Verbrauch'],...Object.entries(m).sort().map(([k,v])=>[...k.split('|'),v]),...Object.entries(y).sort().map(([k,v])=>[k.split('|')[0],'Jahr '+k.split('|')[1],v])]);
+  }
+};
+function csv(name,rows){
+  const t='\ufeff'+rows.map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'text/csv'}));a.download=name+'-'+today()+'.csv';a.click();
+}
+document.addEventListener('click',e=>{const t=e.target.closest('[data-a]');if(t)A[t.dataset.a]?.(t.dataset)});
+init();
+</script></body></html>
